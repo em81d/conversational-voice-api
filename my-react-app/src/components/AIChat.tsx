@@ -11,6 +11,8 @@ export const AIChat: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  // NEW: State to track active error messages
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,6 +20,7 @@ export const AIChat: React.FC = () => {
 
     const userMessageText = input;
     setInput('');
+    setErrorMsg(null); // Clear any previous errors when a new message is sent
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
@@ -29,24 +32,30 @@ export const AIChat: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Fetch response stream binary file from your secure local backend proxy
       const response = await fetch('http://localhost:5000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userMessageText }),
       });
 
-      if (!response.ok) throw new Error('Network failure down the pipeline');
+      // NEW: Handle non-OK status codes (like 503 or 500)
+      if (!response.ok) {
+        // Try to read the JSON error message we formatted in the backend
+        try {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Something went wrong on the server.');
+        } catch (jsonError) {
+          // Fallback if the server didn't return JSON
+          throw new Error(`Server error: ${response.status} ${response.statusText}`);
+        }
+      }
 
-      // Unpack text from custom response header setup
       const aiTextEncoded = response.headers.get('X-AI-Text');
       const aiResponseText = aiTextEncoded ? decodeURIComponent(aiTextEncoded) : "Response audio generated.";
 
-      // Read audio binary stream into an executable browser element URL
       const audioBlob = await response.blob();
       const audioUrl = URL.createObjectURL(audioBlob);
 
-      // Instantly trigger verbal voice playback inside the user's browser
       const audio = new Audio(audioUrl);
       audio.play();
 
@@ -57,8 +66,10 @@ export const AIChat: React.FC = () => {
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, aiMessage]);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Connection or system pipeline break:", error);
+      // NEW: Set the error message to display in the UI
+      setErrorMsg(error.message || "Failed to connect to the server. Please check if your backend is running.");
     } finally {
       setIsLoading(false);
     }
@@ -86,6 +97,21 @@ export const AIChat: React.FC = () => {
         ))}
         {isLoading && <div style={{ color: '#888', fontStyle: 'italic' }}>AI is thinking & speaking...</div>}
       </div>
+
+      {/* NEW: Conditional rendering for the error box */}
+      {errorMsg && (
+        <div style={{ 
+          backgroundColor: '#f8d7da', 
+          color: '#721c24', 
+          padding: '0.75rem', 
+          borderRadius: '4px', 
+          border: '1px solid #f5c6cb', 
+          marginBottom: '1rem',
+          fontSize: '0.9rem'
+        }}>
+          ⚠️ <strong>Error:</strong> {errorMsg}
+        </div>
+      )}
 
       <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: '0.5rem' }}>
         <input 
