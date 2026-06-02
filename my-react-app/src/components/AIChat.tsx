@@ -28,36 +28,65 @@ const VOICE_REGISTRY: Record<ProviderType, VoiceOption[]> = {
     { id: 'Fenrir', name: 'Fenrir', desc: 'Monster deep ♂' },
   ],
   elevenlabs: [
-    { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel', desc: 'Standard F' },
-    { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam',   desc: 'Natural M'  },
-    { id: 'hpp4J3VqNfWAUOO0d1Us', name: 'Bella',  desc: 'Warm F'     },
-    { id: 'nzFihrBIvB34imQBuxub ', name: 'Josh',  desc: 'Teacher for Kids'   },
+    { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Sarah',  desc: 'Reassuring ♀' },
+    { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam',   desc: 'Dominant ♂'   },
+    { id: 'Xb7hH8MSUJpSbSDYk0k2', name: 'Alice',  desc: 'Educator ♀'   },
+    { id: 'nPczCjzI2devNBz1zQrb', name: 'Brian',  desc: 'Comforting ♂' },
   ],
   hume: [
     { id: 'hume_default', name: 'EVI', desc: 'Adaptive emotion' },
   ],
 };
 
-const PROVIDER_COLORS: Record<ProviderType, string> = {
-  google:     '#6c63ff',
-  elevenlabs: '#3ecfb2',
-  hume:       '#ff9f5a',
+// Provider accent palette — vivid but harmonious on white
+const PROVIDER_THEME: Record<ProviderType, {
+  primary: string;
+  light: string;
+  lighter: string;
+  text: string;
+  label: string;
+  tag: string;
+}> = {
+  google: {
+    primary:  '#4F46E5',   // indigo
+    light:    '#EEF2FF',
+    lighter:  '#E0E7FF',
+    text:     '#3730A3',
+    label:    'Google',
+    tag:      'Gemini',
+  },
+  elevenlabs: {
+    primary:  '#0D9488',   // teal
+    light:    '#F0FDFA',
+    lighter:  '#CCFBF1',
+    text:     '#0F766E',
+    label:    'ElevenLabs',
+    tag:      'Studio',
+  },
+  hume: {
+    primary:  '#EA580C',   // orange
+    light:    '#FFF7ED',
+    lighter:  '#FED7AA',
+    text:     '#C2410C',
+    label:    'Hume AI',
+    tag:      'EVI · Emotion',
+  },
 };
 
-// ─── Waveform Canvas ──────────────────────────────────────────────────────────
+// ─── Waveform ─────────────────────────────────────────────────────────────────
 
 type WaveState = 'idle' | 'loading' | 'active';
 
 function useWaveform(canvasRef: React.RefObject<HTMLCanvasElement | null>, provider: ProviderType) {
-  const stateRef    = useRef<WaveState>('idle');
-  const phaseRef    = useRef(0);
-  const ampRef      = useRef(0.08);
-  const targetRef   = useRef(0.08);
-  const rafRef      = useRef<number | null>(null);
+  const stateRef  = useRef<WaveState>('idle');
+  const phaseRef  = useRef(0);
+  const ampRef    = useRef(0.06);
+  const targetRef = useRef(0.06);
+  const rafRef    = useRef<number | null>(null);
 
   const setWaveState = useCallback((s: WaveState) => {
     stateRef.current = s;
-    targetRef.current = s === 'active' ? 0.55 : s === 'loading' ? 0.18 : 0.04;
+    targetRef.current = s === 'active' ? 0.52 : s === 'loading' ? 0.16 : 0.06;
   }, []);
 
   useEffect(() => {
@@ -71,38 +100,36 @@ function useWaveform(canvasRef: React.RefObject<HTMLCanvasElement | null>, provi
       const W = canvas.offsetWidth;
       const H = canvas.offsetHeight;
       if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
-
       ctx.clearRect(0, 0, W, H);
 
       const active = stateRef.current !== 'idle';
-      ampRef.current += (targetRef.current - ampRef.current) * 0.06;
-      phaseRef.current += active ? 0.065 : 0.018;
+      ampRef.current += (targetRef.current - ampRef.current) * 0.055;
+      phaseRef.current += active ? 0.07 : 0.02;
 
-      const bars = 52;
-      const barW = 2.5;
+      const bars = 48;
+      const barW = 3;
       const gap  = (W - bars * barW) / (bars + 1);
       const midY = H / 2;
-      const color = PROVIDER_COLORS[provider];
+      const color = PROVIDER_THEME[provider].primary;
 
       for (let i = 0; i < bars; i++) {
-        const x   = gap + i * (barW + gap);
-        const env = Math.sin((i / (bars - 1)) * Math.PI);
-        const noise = active
-          ? Math.sin(i * 0.6 + phaseRef.current) * 0.5
-            + Math.sin(i * 1.4 + phaseRef.current * 1.3) * 0.3
-            + Math.sin(i * 2.3 + phaseRef.current * 0.7) * 0.2
-          : Math.sin(i * 0.4 + phaseRef.current) * 0.5;
+        const x    = gap + i * (barW + gap);
+        const env  = Math.sin((i / (bars - 1)) * Math.PI);
+        const wave = active
+          ? Math.sin(i * 0.55 + phaseRef.current) * 0.5
+            + Math.sin(i * 1.35 + phaseRef.current * 1.4) * 0.3
+            + Math.sin(i * 2.2  + phaseRef.current * 0.8) * 0.2
+          : Math.sin(i * 0.38 + phaseRef.current) * 0.5;
 
-        const h = Math.max(1.5, Math.abs(noise) * env * ampRef.current * H);
+        const h = Math.max(2, Math.abs(wave) * env * ampRef.current * H);
+        const alpha = 0.18 + Math.abs(wave) * 0.7;
 
         ctx.fillStyle = color;
-        ctx.globalAlpha = 0.15 + Math.abs(noise) * 0.65;
+        ctx.globalAlpha = alpha;
         ctx.beginPath();
-        const r = Math.min(barW / 2, h / 2);
-        ctx.roundRect(x, midY - h, barW, h * 2, r);
+        ctx.roundRect(x, midY - h, barW, h * 2, barW / 2);
         ctx.fill();
       }
-
       ctx.globalAlpha = 1;
       rafRef.current = requestAnimationFrame(draw);
     };
@@ -116,142 +143,118 @@ function useWaveform(canvasRef: React.RefObject<HTMLCanvasElement | null>, provi
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-interface ProviderButtonProps {
-  provider: ProviderType;
-  label: string;
-  tag: string;
+const ProviderButton: React.FC<{
+  id: ProviderType;
   active: boolean;
   onClick: () => void;
-}
+}> = ({ id, active, onClick }) => {
+  const t = PROVIDER_THEME[id];
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      style={{
+        flex: 1,
+        padding: '10px 6px',
+        borderRadius: 12,
+        border: active ? `1.5px solid ${t.primary}` : '1.5px solid #E5E7EB',
+        background: active ? t.light : '#fff',
+        cursor: 'pointer',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 4,
+        transition: 'all 0.18s',
+        boxShadow: active ? `0 0 0 3px ${t.lighter}` : 'none',
+      }}
+    >
+      <div style={{
+        width: 8, height: 8, borderRadius: '50%',
+        background: active ? t.primary : '#D1D5DB',
+        transition: 'background 0.18s',
+        boxShadow: active ? `0 0 0 3px ${t.lighter}` : 'none',
+      }} />
+      <span style={{ fontSize: 12, fontWeight: 700, color: active ? t.text : '#6B7280', letterSpacing: '-0.1px' }}>
+        {t.label}
+      </span>
+      <span style={{ fontSize: 10, fontWeight: 400, color: active ? t.primary : '#9CA3AF' }}>
+        {t.tag}
+      </span>
+    </button>
+  );
+};
 
-const ProviderButton: React.FC<ProviderButtonProps> = ({ provider, label, tag, active, onClick }) => (
-  <button
-    onClick={onClick}
-    aria-pressed={active}
-    style={{
-      flex: 1,
-      padding: '10px 8px',
-      borderRadius: 10,
-      border: active
-        ? `0.5px solid ${PROVIDER_COLORS[provider]}66`
-        : '0.5px solid rgba(255,255,255,0.1)',
-      background: active
-        ? `${PROVIDER_COLORS[provider]}25`
-        : 'rgba(255,255,255,0.03)',
-      cursor: 'pointer',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      gap: 5,
-      color: active ? '#f5f3ed' : 'rgba(232,230,223,0.5)',
-      transition: 'all 0.2s',
-    }}
-  >
-    <div style={{
-      width: 8, height: 8, borderRadius: '50%',
-      background: active ? PROVIDER_COLORS[provider] : 'rgba(255,255,255,0.2)',
-      transition: 'background 0.2s',
-      ...(active ? { boxShadow: `0 0 6px ${PROVIDER_COLORS[provider]}` } : {}),
-    }} />
-    <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.3px' }}>{label}</span>
-    <span style={{ fontSize: 9, fontFamily: "'DM Mono', monospace", fontWeight: 300, opacity: 0.6 }}>{tag}</span>
-  </button>
-);
-
-interface TypingBubbleProps {}
-
-const TypingBubble: React.FC<TypingBubbleProps> = () => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '6px 8px' }}>
-    {[0, 200, 400].map(delay => (
-      <span key={delay} style={{
-        width: 5, height: 5, borderRadius: '50%',
-        background: 'rgba(232,230,223,0.35)',
+const TypingBubble: React.FC = () => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 4px' }}>
+    {[0, 160, 320].map(d => (
+      <span key={d} style={{
+        width: 6, height: 6, borderRadius: '50%', background: '#9CA3AF',
         display: 'inline-block',
-        animation: 'vl-typing 1.2s ease-in-out infinite',
-        animationDelay: `${delay}ms`,
+        animation: 'vl-typing 1.1s ease-in-out infinite',
+        animationDelay: `${d}ms`,
       }} />
     ))}
   </div>
 );
 
-interface ChatMessageProps {
-  msg: Message;
-}
-
-const ChatMessage: React.FC<ChatMessageProps> = ({ msg }) => (
-  <div style={{
-    display: 'flex',
-    gap: 10,
-    alignItems: 'flex-end',
-    flexDirection: msg.sender === 'user' ? 'row-reverse' : 'row',
-  }}>
-    {/* Avatar */}
-    <div style={{
-      width: 28, height: 28, borderRadius: 8,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontSize: 13, flexShrink: 0,
-      background: msg.sender === 'user'
-        ? 'rgba(108,99,255,0.25)'
-        : 'rgba(255,255,255,0.07)',
-      color: msg.sender === 'user'
-        ? '#a8a3ff'
-        : 'rgba(232,230,223,0.6)',
-    }} aria-hidden>
-      <i className={`ti ti-${msg.sender === 'user' ? 'user' : 'robot'}`} />
+const ChatMessage: React.FC<{ msg: Message; provider: ProviderType }> = ({ msg, provider }) => {
+  const t = PROVIDER_THEME[provider];
+  const isUser = msg.sender === 'user';
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexDirection: isUser ? 'row-reverse' : 'row' }}>
+      <div style={{
+        width: 28, height: 28, borderRadius: 8, flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13,
+        background: isUser ? t.lighter : '#F3F4F6',
+        color: isUser ? t.text : '#6B7280',
+        fontWeight: 700,
+      }} aria-hidden>
+        <i className={`ti ti-${isUser ? 'user' : 'robot'}`} />
+      </div>
+      <div style={{
+        padding: '9px 13px',
+        borderRadius: 14,
+        ...(isUser ? { borderBottomRightRadius: 3 } : { borderBottomLeftRadius: 3 }),
+        maxWidth: '76%',
+        fontSize: 14,
+        lineHeight: 1.55,
+        background: isUser ? t.light : '#F9FAFB',
+        border: isUser ? `1px solid ${t.lighter}` : '1px solid #F3F4F6',
+        color: isUser ? t.text : '#111827',
+      }}>
+        {msg.isTyping ? <TypingBubble /> : msg.text}
+      </div>
     </div>
-
-    {/* Bubble */}
-    <div style={{
-      padding: '9px 14px',
-      borderRadius: 14,
-      ...(msg.sender === 'user'
-        ? { borderBottomRightRadius: 4 }
-        : { borderBottomLeftRadius: 4 }),
-      maxWidth: '78%',
-      fontSize: 14,
-      lineHeight: 1.5,
-      background: msg.sender === 'user'
-        ? 'rgba(108,99,255,0.22)'
-        : 'rgba(255,255,255,0.05)',
-      border: msg.sender === 'user'
-        ? '0.5px solid rgba(108,99,255,0.35)'
-        : '0.5px solid rgba(255,255,255,0.09)',
-      color: msg.sender === 'user' ? '#dddaf8' : '#e8e6df',
-    }}>
-      {msg.isTyping ? <TypingBubble /> : msg.text}
-    </div>
-  </div>
-);
+  );
+};
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export const AIChat: React.FC = () => {
-  const [messages,         setMessages]         = useState<Message[]>([]);
-  const [input,            setInput]             = useState('');
-  const [isLoading,        setIsLoading]         = useState(false);
-  const [errorMsg,         setErrorMsg]          = useState<string | null>(null);
-  const [selectedProvider, setSelectedProvider]  = useState<ProviderType>('google');
-  const [selectedVoice,    setSelectedVoice]     = useState<string>('Puck');
-  const [waveState,        setWaveStateLocal]    = useState<WaveState>('idle');
+  const [messages,          setMessages]        = useState<Message[]>([]);
+  const [input,             setInput]            = useState('');
+  const [isLoading,         setIsLoading]        = useState(false);
+  const [errorMsg,          setErrorMsg]         = useState<string | null>(null);
+  const [selectedProvider,  setSelectedProvider] = useState<ProviderType>('google');
+  const [selectedVoice,     setSelectedVoice]    = useState<string>('Puck');
+  const [waveState,         setWaveStateLocal]   = useState<WaveState>('idle');
 
-  const canvasRef    = useRef<HTMLCanvasElement>(null);
-  const msgEndRef    = useRef<HTMLDivElement>(null);
-  const inputRef     = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const msgEndRef = useRef<HTMLDivElement>(null);
+  const inputRef  = useRef<HTMLInputElement>(null);
 
   const setWaveState = useWaveform(canvasRef, selectedProvider);
+  const theme = PROVIDER_THEME[selectedProvider];
 
-  // Reset voice when provider changes
   useEffect(() => {
     setSelectedVoice(VOICE_REGISTRY[selectedProvider][0].id);
   }, [selectedProvider]);
 
-  // Scroll to bottom on new messages
   useEffect(() => {
     msgEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const currentVoiceName = VOICE_REGISTRY[selectedProvider]
-    .find(v => v.id === selectedVoice)?.name.toLowerCase() ?? '';
+  const currentVoice = VOICE_REGISTRY[selectedProvider].find(v => v.id === selectedVoice);
 
   const handleSend = async () => {
     const text = input.trim();
@@ -260,24 +263,11 @@ export const AIChat: React.FC = () => {
     setInput('');
     setErrorMsg(null);
 
-    const userMsg: Message = {
-      id: crypto.randomUUID(),
-      sender: 'user',
-      text,
-      timestamp: new Date(),
-    };
-
-    const typingMsg: Message = {
-      id: crypto.randomUUID(),
-      sender: 'ai',
-      text: '',
-      timestamp: new Date(),
-      isTyping: true,
-    };
+    const userMsg: Message  = { id: crypto.randomUUID(), sender: 'user', text, timestamp: new Date() };
+    const typingMsg: Message = { id: crypto.randomUUID(), sender: 'ai',  text: '', timestamp: new Date(), isTyping: true };
 
     setMessages(prev => [...prev, userMsg, typingMsg]);
     setIsLoading(true);
-
     setWaveState('loading');
     setWaveStateLocal('loading');
 
@@ -304,25 +294,17 @@ export const AIChat: React.FC = () => {
       setWaveState('active');
       setWaveStateLocal('active');
       audio.play();
-
       audio.onended = () => {
         setWaveState('idle');
         setWaveStateLocal('idle');
         URL.revokeObjectURL(audioUrl);
       };
 
-      // Replace typing bubble with real response
-      setMessages(prev => prev.map(m =>
-        m.isTyping
-          ? { ...m, text: aiText, isTyping: false }
-          : m
-      ));
+      setMessages(prev => prev.map(m => m.isTyping ? { ...m, text: aiText, isTyping: false } : m));
 
     } catch (err: any) {
       setMessages(prev => prev.map(m =>
-        m.isTyping
-          ? { ...m, text: '[Error: could not connect to backend]', isTyping: false }
-          : m
+        m.isTyping ? { ...m, text: '[Error: could not connect to backend]', isTyping: false } : m
       ));
       setErrorMsg(err.message || 'Pipeline failure — is the backend running?');
       setWaveState('idle');
@@ -337,183 +319,186 @@ export const AIChat: React.FC = () => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
-  const statusDotStyle: React.CSSProperties = {
-    width: 6, height: 6, borderRadius: '50%', flexShrink: 0, transition: 'background 0.3s',
-    ...(waveState === 'active'
-      ? { background: '#3ecfb2', boxShadow: '0 0 6px #3ecfb2' }
-      : waveState === 'loading'
-      ? { background: '#6c63ff', animation: 'vl-pulse 1s ease-in-out infinite' }
-      : { background: 'rgba(255,255,255,0.15)' }),
-  };
-
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Syne:wght@400;500;600;700;800&display=swap');
-        @keyframes vl-typing {
-          0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
-          40%            { transform: scale(1);   opacity: 1;   }
-        }
-        @keyframes vl-pulse {
-          0%, 100% { opacity: 1;   }
-          50%      { opacity: 0.3; }
-        }
-        .vl-input::placeholder { color: rgba(232,230,223,0.25); }
-        .vl-input:focus { outline: none; border-color: rgba(108,99,255,0.45) !important; background: rgba(255,255,255,0.07) !important; }
-        .vl-messages::-webkit-scrollbar       { width: 3px; }
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+        @keyframes vl-typing  { 0%,80%,100%{transform:scale(0.6);opacity:0.35} 40%{transform:scale(1);opacity:1} }
+        @keyframes vl-pulse   { 0%,100%{opacity:1} 50%{opacity:0.25} }
+        @keyframes vl-fadein  { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+        .vl-root * { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; box-sizing: border-box; }
+        .vl-input::placeholder { color: #9CA3AF; }
+        .vl-input:focus { outline: none; }
+        .vl-msg-anim { animation: vl-fadein 0.18s ease both; }
+        .vl-chip:hover { filter: brightness(0.95); }
+        .vl-send:hover:not(:disabled) { filter: brightness(1.1); transform: scale(1.05); }
+        .vl-send:active:not(:disabled) { transform: scale(0.96); }
+        .vl-messages::-webkit-scrollbar { width: 4px; }
         .vl-messages::-webkit-scrollbar-track { background: transparent; }
-        .vl-messages::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
-        .vl-voice-chip:hover { color: rgba(232,230,223,0.85) !important; background: rgba(255,255,255,0.05) !important; }
-        .vl-send-btn:hover:not(:disabled) { background: #7d75ff !important; transform: scale(1.04); }
-        .vl-send-btn:active:not(:disabled) { transform: scale(0.96); }
+        .vl-messages::-webkit-scrollbar-thumb { background: #E5E7EB; border-radius: 4px; }
       `}</style>
 
-      <div style={{
-        fontFamily: "'Syne', sans-serif",
-        background: '#0d0e12',
-        borderRadius: 16,
+      <div className="vl-root" style={{
+        background: '#fff',
+        borderRadius: 20,
+        border: '1px solid #E5E7EB',
+        boxShadow: '0 4px 24px rgba(0,0,0,0.07)',
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
-        color: '#e8e6df',
         maxWidth: 600,
         margin: '2rem auto',
-        minHeight: 600,
+        minHeight: 580,
       }}>
 
         {/* ── Header ── */}
         <div style={{
-          padding: '20px 24px 16px',
-          borderBottom: '0.5px solid rgba(255,255,255,0.08)',
-          display: 'flex', alignItems: 'flex-start', gap: 16,
+          padding: '18px 20px 14px',
+          borderBottom: '1px solid #F3F4F6',
+          display: 'flex', alignItems: 'center', gap: 12,
+          background: theme.light,
+          transition: 'background 0.3s',
         }}>
           <div style={{
-            width: 36, height: 36, borderRadius: 10,
-            background: 'linear-gradient(135deg, #6c63ff 0%, #3ecfb2 100%)',
+            width: 38, height: 38, borderRadius: 11, flexShrink: 0,
+            background: theme.primary,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0, marginTop: 2,
-          }} aria-hidden>
-            <i className="ti ti-wave-sine" style={{ fontSize: 18, color: 'white' }} />
+            boxShadow: `0 2px 8px ${theme.primary}44`,
+            transition: 'background 0.3s, box-shadow 0.3s',
+          }}>
+            <i className="ti ti-wave-sine" style={{ fontSize: 19, color: '#fff' }} aria-hidden />
           </div>
-          <div>
-            <p style={{ fontSize: 18, fontWeight: 700, color: '#f5f3ed', margin: '0 0 2px', letterSpacing: '-0.3px' }}>
+          <div style={{ flex: 1 }}>
+            <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#111827', letterSpacing: '-0.2px' }}>
               Voice Lab
             </p>
-            <p style={{ fontSize: 12, color: 'rgba(232,230,223,0.45)', margin: 0, fontFamily: "'DM Mono', monospace", fontWeight: 300, letterSpacing: '0.5px' }}>
-              // provider: {selectedProvider} · voice: {currentVoiceName}
+            <p style={{ margin: 0, fontSize: 12, color: theme.text, fontWeight: 500, transition: 'color 0.3s' }}>
+              {theme.label} · {currentVoice?.name ?? ''}
+              {currentVoice && <span style={{ fontWeight: 400, color: '#9CA3AF' }}> — {currentVoice.desc}</span>}
             </p>
+          </div>
+          {/* Live indicator */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{
+              width: 7, height: 7, borderRadius: '50%',
+              background: waveState === 'active'  ? '#10B981'
+                        : waveState === 'loading' ? theme.primary
+                        : '#D1D5DB',
+              boxShadow: waveState === 'active'  ? '0 0 0 3px #D1FAE5'
+                        : waveState === 'loading' ? `0 0 0 3px ${theme.lighter}`
+                        : 'none',
+              transition: 'all 0.3s',
+              animation: waveState === 'loading' ? 'vl-pulse 0.9s ease-in-out infinite' : 'none',
+            }} />
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#9CA3AF' }}>
+              {waveState === 'active' ? 'PLAYING' : waveState === 'loading' ? 'THINKING' : 'READY'}
+            </span>
           </div>
         </div>
 
-        {/* ── Provider Tabs ── */}
+        {/* ── Provider Selector ── */}
         <div style={{
-          display: 'flex', gap: 8, padding: '16px 24px',
-          borderBottom: '0.5px solid rgba(255,255,255,0.08)',
+          display: 'flex', gap: 8, padding: '12px 20px',
+          borderBottom: '1px solid #F3F4F6',
+          background: '#FAFAFA',
         }} role="group" aria-label="Select voice provider">
-          <ProviderButton provider="google"     label="Google"     tag="gemini"       active={selectedProvider === 'google'}     onClick={() => setSelectedProvider('google')} />
-          <ProviderButton provider="elevenlabs" label="ElevenLabs" tag="studio"       active={selectedProvider === 'elevenlabs'} onClick={() => setSelectedProvider('elevenlabs')} />
-          <ProviderButton provider="hume"       label="Hume AI"    tag="evi · emotion" active={selectedProvider === 'hume'}      onClick={() => setSelectedProvider('hume')} />
+          {(['google', 'elevenlabs', 'hume'] as ProviderType[]).map(id => (
+            <ProviderButton key={id} id={id} active={selectedProvider === id} onClick={() => setSelectedProvider(id)} />
+          ))}
         </div>
 
         {/* ── Voice Chips ── */}
         <div style={{
-          padding: '12px 24px',
-          borderBottom: '0.5px solid rgba(255,255,255,0.08)',
-          display: 'flex', gap: 8, flexWrap: 'wrap',
+          display: 'flex', gap: 6, padding: '10px 20px', flexWrap: 'wrap',
+          borderBottom: '1px solid #F3F4F6',
         }} role="group" aria-label="Select voice persona">
-          {VOICE_REGISTRY[selectedProvider].map(voice => (
-            <button
-              key={voice.id}
-              className="vl-voice-chip"
-              onClick={() => setSelectedVoice(voice.id)}
-              title={voice.desc}
-              style={{
-                padding: '5px 12px',
-                borderRadius: 20,
-                border: selectedVoice === voice.id
-                  ? '0.5px solid rgba(255,255,255,0.25)'
-                  : '0.5px solid rgba(255,255,255,0.1)',
-                background: selectedVoice === voice.id
-                  ? 'rgba(255,255,255,0.1)'
-                  : 'transparent',
-                cursor: 'pointer',
-                fontSize: 12,
-                fontFamily: "'DM Mono', monospace",
-                fontWeight: 400,
-                color: selectedVoice === voice.id
-                  ? '#f5f3ed'
-                  : 'rgba(232,230,223,0.5)',
-                transition: 'all 0.18s',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {voice.name}
-            </button>
-          ))}
+          {VOICE_REGISTRY[selectedProvider].map(voice => {
+            const active = voice.id === selectedVoice;
+            return (
+              <button
+                key={voice.id}
+                className="vl-chip"
+                onClick={() => setSelectedVoice(voice.id)}
+                title={voice.desc}
+                style={{
+                  padding: '5px 14px',
+                  borderRadius: 99,
+                  border: active ? `1.5px solid ${theme.primary}` : '1.5px solid #E5E7EB',
+                  background: active ? theme.light : '#fff',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: active ? 700 : 500,
+                  color: active ? theme.text : '#6B7280',
+                  transition: 'all 0.15s',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {voice.name}
+                <span style={{ marginLeft: 5, fontSize: 10, opacity: 0.65, fontWeight: 400 }}>{voice.desc}</span>
+              </button>
+            );
+          })}
         </div>
 
-        {/* ── Message List ── */}
-        <div
-          className="vl-messages"
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            padding: '16px 24px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 12,
-            minHeight: 220,
-            maxHeight: 260,
-          }}
-        >
+        {/* ── Messages ── */}
+        <div className="vl-messages" style={{
+          flex: 1, overflowY: 'auto',
+          padding: '16px 20px',
+          display: 'flex', flexDirection: 'column', gap: 10,
+          minHeight: 200, maxHeight: 260,
+        }}>
           {messages.length === 0 ? (
             <div style={{
               flex: 1, display: 'flex', flexDirection: 'column',
               alignItems: 'center', justifyContent: 'center',
-              color: 'rgba(232,230,223,0.25)',
-              fontSize: 13, textAlign: 'center', gap: 10, padding: 20,
+              gap: 8, color: '#9CA3AF', fontSize: 13, textAlign: 'center', padding: 20,
             }}>
-              <i className="ti ti-messages" style={{ fontSize: 28, opacity: 0.4 }} aria-hidden />
-              <span>Send a message to test your selected<br />provider and voice persona</span>
+              <i className="ti ti-messages" style={{ fontSize: 30, color: '#D1D5DB' }} aria-hidden />
+              Send a message to test<br />your selected provider and voice
             </div>
           ) : (
-            messages.map(msg => <ChatMessage key={msg.id} msg={msg} />)
+            messages.map(msg => (
+              <div key={msg.id} className="vl-msg-anim">
+                <ChatMessage msg={msg} provider={selectedProvider} />
+              </div>
+            ))
           )}
           <div ref={msgEndRef} />
         </div>
 
         {/* ── Waveform ── */}
         <div style={{
-          padding: '12px 24px',
-          borderTop: '0.5px solid rgba(255,255,255,0.08)',
-          borderBottom: '0.5px solid rgba(255,255,255,0.08)',
-          display: 'flex', alignItems: 'center', gap: 12, height: 52,
+          padding: '10px 20px',
+          borderTop: '1px solid #F3F4F6',
+          borderBottom: '1px solid #F3F4F6',
+          background: theme.light,
+          display: 'flex', alignItems: 'center', gap: 10, height: 50,
+          transition: 'background 0.3s',
         }} aria-hidden>
-          <span style={{ fontSize: 10, fontFamily: "'DM Mono', monospace", fontWeight: 300, color: 'rgba(232,230,223,0.3)', whiteSpace: 'nowrap', letterSpacing: '0.5px' }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: theme.text, letterSpacing: '0.8px', whiteSpace: 'nowrap', opacity: 0.7 }}>
             OUTPUT
           </span>
-          <canvas ref={canvasRef} style={{ flex: 1, height: 32 }} />
-          <div style={statusDotStyle} />
+          <canvas ref={canvasRef} style={{ flex: 1, height: 30 }} />
         </div>
 
-        {/* ── Error Banner ── */}
+        {/* ── Error ── */}
         {errorMsg && (
           <div style={{
-            margin: '0 24px 12px',
-            padding: '10px 14px',
+            margin: '8px 20px 0',
+            padding: '9px 13px',
             borderRadius: 10,
-            background: 'rgba(226,75,74,0.12)',
-            border: '0.5px solid rgba(226,75,74,0.3)',
-            fontSize: 13,
-            color: '#f09595',
-            fontFamily: "'DM Mono', monospace",
+            background: '#FEF2F2',
+            border: '1px solid #FECACA',
+            fontSize: 12,
+            fontWeight: 500,
+            color: '#B91C1C',
           }} role="alert">
             ⚠ {errorMsg}
           </div>
         )}
 
-        {/* ── Input Row ── */}
-        <div style={{ padding: '14px 24px', display: 'flex', gap: 10, alignItems: 'center' }}>
+        {/* ── Input ── */}
+        <div style={{ padding: '12px 20px', display: 'flex', gap: 8, alignItems: 'center' }}>
           <input
             ref={inputRef}
             className="vl-input"
@@ -521,37 +506,39 @@ export const AIChat: React.FC = () => {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={`Testing ${selectedProvider} · ${currentVoiceName} voice...`}
+            placeholder={`Message ${theme.label} · ${currentVoice?.name ?? ''}...`}
             disabled={isLoading}
             style={{
               flex: 1,
-              padding: '10px 16px',
+              padding: '10px 15px',
               borderRadius: 12,
-              border: '0.5px solid rgba(255,255,255,0.1)',
-              background: 'rgba(255,255,255,0.05)',
-              color: '#e8e6df',
-              fontFamily: "'Syne', sans-serif",
+              border: `1.5px solid`,
+              borderColor: input.length > 0 ? theme.primary : '#E5E7EB',
+              background: '#fff',
+              color: '#111827',
               fontSize: 14,
-              caretColor: '#6c63ff',
-              transition: 'border-color 0.2s, background 0.2s',
+              fontWeight: 400,
+              transition: 'border-color 0.18s',
+              caretColor: theme.primary,
             }}
           />
           <button
-            className="vl-send-btn"
+            className="vl-send"
             onClick={handleSend}
-            disabled={isLoading}
+            disabled={isLoading || !input.trim()}
             aria-label="Send message"
             style={{
-              width: 40, height: 40,
-              borderRadius: 11,
+              width: 42, height: 42,
+              borderRadius: 12,
               border: 'none',
-              background: isLoading ? 'rgba(108,99,255,0.3)' : '#6c63ff',
-              color: 'white',
-              cursor: isLoading ? 'not-allowed' : 'pointer',
+              background: isLoading || !input.trim() ? '#E5E7EB' : theme.primary,
+              color: isLoading || !input.trim() ? '#9CA3AF' : '#fff',
+              cursor: isLoading || !input.trim() ? 'not-allowed' : 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 16,
+              fontSize: 17,
               transition: 'all 0.18s',
               flexShrink: 0,
+              boxShadow: !isLoading && input.trim() ? `0 2px 8px ${theme.primary}44` : 'none',
             }}
           >
             <i className="ti ti-arrow-up" aria-hidden />
