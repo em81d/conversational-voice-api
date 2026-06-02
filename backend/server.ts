@@ -17,7 +17,12 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const ai = new GoogleGenAI({ 
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    apiVersion: 'v1beta'
+  }
+});
 const elevenLabs = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY });
 
 app.post('/api/chat', async (req, res) => {
@@ -31,7 +36,7 @@ app.post('/api/chat', async (req, res) => {
 
     // 2. Generate the master conversation text using Gemini
     const geminiResponse = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
+      model: 'gemini-2.5-flash',
       contents: message,
     });
 
@@ -47,7 +52,7 @@ app.post('/api/chat', async (req, res) => {
         
         // Call Gemini's built-in multi-modal audio generation engine
         const googleAudioResponse = await ai.models.generateContent({
-          model: 'gemini-2.5-flash', // Use Gemini 2.5 flash which features native audio output capabilities
+          model: 'gemini-2.5-flash', // Use Gemini 1.5 flash which features native audio output capabilities
           contents: aiText,
           config: {
             responseModalities: ["AUDIO"],
@@ -96,14 +101,43 @@ app.post('/api/chat', async (req, res) => {
         throw new Error(`Unsupported provider: ${provider}`);
     }
 
-  } catch (error: any) {
-    console.error("Backend pipeline error:", error);
+} catch (error: any) {
+    console.error("Backend pipeline error intercepted:", error.message);
+    console.error("Full stack:", error.stack);  // ← add this
+    
+    // 1. If headers were already sent mid-stream, terminate clean
     if (res.headersSent) {
       console.warn("⚠️ Error occurred mid-stream. Closing connection abruptly.");
       res.end();
       return; 
     }
-    res.status(500).json({ error: error.message || 'Internal server processing failed.' });
+
+    // Default values if we can't find a specific error code
+    let statusCode = 500;
+    let errorMessage = 'Internal server processing failed. Please try again.';
+
+    // 2. STAGE 2 DETECTOR: Inspect the raw error object from the @google/genai SDK
+    // The SDK often wraps errors inside an 'status' field, a 'status' property, or stringifies it in 'message'
+    const errorString = JSON.stringify(error);
+    const messageText = error.message || '';
+
+    if (
+      error.status === 503 || 
+      error.statusCode === 503 ||
+      messageText.includes('503') ||
+      messageText.includes('high demand') ||
+      errorString.includes('503') ||
+      errorString.includes('UNAVAILABLE')
+    ) {
+      statusCode = 503;
+      errorMessage = 'The Google Gemini server is experiencing high demand right now. Spikes are temporary—please wait a few seconds and try again!';
+    } else if (error.message) {
+      // If it's a different known error (like a wrong model name or 400), pass that text along instead
+      errorMessage = error.message;
+    }
+
+    // 3. Send the accurate status code and human-readable message down to React
+    res.status(statusCode).json({ error: errorMessage });
   }
 });
 
