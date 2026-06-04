@@ -3,10 +3,11 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import WebSocketServer from 'ws';
 
 dotenv.config();
 
-if (!process.env.GEMINI_API_KEY || !process.env.ELEVENLABS_API_KEY) {
+if (!process.env.GEMINI_API_KEY || !process.env.ELEVENLABS_API_KEY || !process.env.HUME_API_KEY) {
   console.error("❌ CRITICAL ERROR: Missing API keys in backend/.env file.");
   process.exit(1);
 }
@@ -17,74 +18,68 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-const ai = new GoogleGenAI({ 
+const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    apiVersion: 'v1beta'
-  }
+  httpOptions: { apiVersion: 'v1beta' }
 });
 const elevenLabs = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY });
 
 app.post('/api/chat', async (req, res) => {
   try {
-    // 1. Accept the message, chosen provider, and specific voiceId from React
     const { message, provider, voiceId } = req.body;
-    
+
     if (!message || !provider || !voiceId) {
       return res.status(400).json({ error: 'Missing required fields: message, provider, or voiceId' });
     }
 
-    // 2. Generate the master conversation text using Gemini
-    const geminiResponse = await ai.models.generateContent({
+    // ── Step 1: Generate conversational text with the standard chat model ──
+    // This is always gemini-2.5-flash regardless of provider — it only does text.
+    const textResponse = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: message,
     });
+    const aiText = textResponse.text || "I couldn't process an answer.";
 
-    const aiText = geminiResponse.text || "I couldn't process an answer.";
-
-    // Set shared audio streaming headers
     res.setHeader('X-AI-Text', encodeURIComponent(aiText));
 
-    // 3. Dynamic Audio Routing Engine
+    // ── Step 2: Convert that text to speech via the chosen provider ──
     switch (provider) {
-      case 'google':
-        res.setHeader('Content-Type', 'audio/wav'); // Gemini TTS streams raw PCM audio wrapped in WAV container
-        
-        // Call Gemini's built-in multi-modal audio generation engine
-        const googleAudioResponse = await ai.models.generateContent({
-          model: 'gemini-2.5-flash', // Use Gemini 1.5 flash which features native audio output capabilities
+
+      case 'google': {
+        // gemini-2.5-flash-preview-tts is a dedicated TTS model — it only accepts
+        // plain text and returns audio. It cannot answer questions on its own,
+        // which is why we generated the text separately above.
+        res.setHeader('Content-Type', 'audio/wav');
+
+        const ttsResponse = await ai.models.generateContent({
+          model: 'gemini-2.5-flash-preview-tts',
           contents: aiText,
           config: {
-            responseModalities: ["AUDIO"],
+            responseModalities: ['AUDIO'],
             speechConfig: {
               voiceConfig: {
-                prebuiltVoiceConfig: {
-                  voiceName: voiceId, // e.g., "Puck", "Charon", "Kore"
-                },
+                prebuiltVoiceConfig: { voiceName: voiceId }, // e.g. "Puck", "Kore"
               },
             },
           },
         });
 
-        // Unpack the base64 audio chunks natively returned by Google GenAI
-        const candidate = googleAudioResponse.candidates?.[0];
-        const part = candidate?.content?.parts?.[0];
-        
+        const part = ttsResponse.candidates?.[0]?.content?.parts?.[0];
         if (part && 'inlineData' in part && part.inlineData?.data) {
-          const audioBuffer = Buffer.from(part.inlineData.data, 'base64');
-          res.write(audioBuffer);
+          res.write(Buffer.from(part.inlineData.data, 'base64'));
         } else {
-          throw new Error("Failed to extract native audio modality content from Google API response");
+          throw new Error('Google TTS returned no audio data');
         }
         res.end();
         break;
+      }
 
-      case 'elevenlabs':
+      case 'elevenlabs': {
         res.setHeader('Content-Type', 'audio/mpeg');
-        
+
         const elevenStream = await elevenLabs.textToSpeech.stream(voiceId, {
           text: aiText,
-          modelId: "eleven_flash_v2_5",
+          modelId: 'eleven_flash_v2_5',
         });
 
         for await (const chunk of elevenStream) {
@@ -92,37 +87,33 @@ app.post('/api/chat', async (req, res) => {
         }
         res.end();
         break;
+      }
 
       case 'hume':
-        // Placeholder wrapper for your upcoming Hume EVI implementation structure
-        throw new Error("Hume voice provider selected, but backend service connection is still in staging.");
+        throw new Error('Hume voice provider is not yet implemented.');
 
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
 
-} catch (error: any) {
-    console.error("Backend pipeline error intercepted:", error.message);
-    console.error("Full stack:", error.stack);  // ← add this
-    
-    // 1. If headers were already sent mid-stream, terminate clean
+  } catch (error: any) {
+    console.error('Backend pipeline error intercepted:', error.message);
+    console.error('Full stack:', error.stack);
+
     if (res.headersSent) {
-      console.warn("⚠️ Error occurred mid-stream. Closing connection abruptly.");
+      console.warn('⚠️ Error occurred mid-stream. Closing connection.');
       res.end();
-      return; 
+      return;
     }
 
-    // Default values if we can't find a specific error code
     let statusCode = 500;
     let errorMessage = 'Internal server processing failed. Please try again.';
 
-    // 2. STAGE 2 DETECTOR: Inspect the raw error object from the @google/genai SDK
-    // The SDK often wraps errors inside an 'status' field, a 'status' property, or stringifies it in 'message'
     const errorString = JSON.stringify(error);
     const messageText = error.message || '';
 
     if (
-      error.status === 503 || 
+      error.status === 503 ||
       error.statusCode === 503 ||
       messageText.includes('503') ||
       messageText.includes('high demand') ||
@@ -130,13 +121,11 @@ app.post('/api/chat', async (req, res) => {
       errorString.includes('UNAVAILABLE')
     ) {
       statusCode = 503;
-      errorMessage = 'The Google Gemini server is experiencing high demand right now. Spikes are temporary—please wait a few seconds and try again!';
+      errorMessage = 'The Google Gemini server is experiencing high demand. Please wait a moment and try again.';
     } else if (error.message) {
-      // If it's a different known error (like a wrong model name or 400), pass that text along instead
       errorMessage = error.message;
     }
 
-    // 3. Send the accurate status code and human-readable message down to React
     res.status(statusCode).json({ error: errorMessage });
   }
 });
