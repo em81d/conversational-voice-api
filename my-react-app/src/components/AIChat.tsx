@@ -11,6 +11,7 @@ interface Message {
 }
 
 type ProviderType = 'google' | 'elevenlabs' | 'hume';
+type VoiceConnectionState = 'idle' | 'connecting' | 'active';
 
 interface VoiceOption {
   id: string;
@@ -232,22 +233,31 @@ const ChatMessage: React.FC<{ msg: Message; provider: ProviderType }> = ({ msg, 
 
 export const AIChat: React.FC = () => {
   const [messages,          setMessages]        = useState<Message[]>([]);
-  const [input,             setInput]            = useState('');
-  const [isLoading,         setIsLoading]        = useState(false);
   const [errorMsg,          setErrorMsg]         = useState<string | null>(null);
   const [selectedProvider,  setSelectedProvider] = useState<ProviderType>('google');
   const [selectedVoice,     setSelectedVoice]    = useState<string>('Puck');
   const [waveState,         setWaveStateLocal]   = useState<WaveState>('idle');
+  const [connectionState, setConnectionState] = useState<VoiceConnectionState>('idle');
 
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const msgEndRef = useRef<HTMLDivElement>(null);
-  const inputRef  = useRef<HTMLInputElement>(null);
+  const playbackContextRef = useRef<AudioContext | null>(null);
+  const nextStartTimeRef = useRef<number>(0);
+  const activeAudioNodesRef = useRef<AudioBufferSourceNode[]>([]);
+
 
   const setWaveState = useWaveform(canvasRef, selectedProvider);
   const theme = PROVIDER_THEME[selectedProvider];
 
   useEffect(() => {
-    setSelectedVoice(VOICE_REGISTRY[selectedProvider][0].id);
+    if (connectionState === 'idle') {
+      setSelectedVoice(VOICE_REGISTRY[selectedProvider][0].id);
+    }
   }, [selectedProvider]);
 
   useEffect(() => {
@@ -256,67 +266,310 @@ export const AIChat: React.FC = () => {
 
   const currentVoice = VOICE_REGISTRY[selectedProvider].find(v => v.id === selectedVoice);
 
-  const handleSend = async () => {
-    const text = input.trim();
-    if (!text || isLoading) return;
+  // Replace your old handleSend/handleKeyDown with this connection loop orchestrator
+  const toggleVoiceConnection = async () => {
+    if (connectionState === 'active' || connectionState === 'connecting') {
+      // Gracefully disconnect if clicked while alive
+      disconnectPipeline();
+      return;
+    }
 
-    setInput('');
     setErrorMsg(null);
-
-    const userMsg: Message  = { id: crypto.randomUUID(), sender: 'user', text, timestamp: new Date() };
-    const typingMsg: Message = { id: crypto.randomUUID(), sender: 'ai',  text: '', timestamp: new Date(), isTyping: true };
-
-    setMessages(prev => [...prev, userMsg, typingMsg]);
-    setIsLoading(true);
+    setConnectionState('connecting');
     setWaveState('loading');
     setWaveStateLocal('loading');
 
     try {
-      const response = await fetch('http://localhost:5000/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, provider: selectedProvider, voiceId: selectedVoice }),
-      });
+      // Establish our raw multiplexed streaming pipeline to the backend
+      const wsUrl = `ws://localhost:5000/stream?provider=${selectedProvider}&voiceId=${selectedVoice}`;
+      const socket = new WebSocket(wsUrl);
 
-      if (!response.ok) {
-        let errText = `Server error ${response.status}`;
-        try { const d = await response.json(); errText = d.error || errText; } catch {}
-        throw new Error(errText);
-      }
+      socket.binaryType = 'arraybuffer';
+      wsRef.current = socket;
 
-      const aiTextEncoded = response.headers.get('X-AI-Text');
-      const aiText = aiTextEncoded ? decodeURIComponent(aiTextEncoded) : 'Audio generated.';
-
-      const blob     = await response.blob();
-      const audioUrl = URL.createObjectURL(blob);
-      const audio    = new Audio(audioUrl);
-
-      setWaveState('active');
-      setWaveStateLocal('active');
-      audio.play();
-      audio.onended = () => {
-        setWaveState('idle');
-        setWaveStateLocal('idle');
-        URL.revokeObjectURL(audioUrl);
+      socket.onopen = () => {
+        console.log('📡 Streaming link established with server proxy.');
+        setConnectionState('active');
+        setWaveState('active');
+        setWaveStateLocal('active');
+        
+        // Create a system notification thread in the text UI
+        const systemNotice: Message = {
+          id: crypto.randomUUID(),
+          sender: 'ai',
+          text: `[Live conversation started with ${selectedProvider}]`,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, systemNotice]);
+        startRecording(socket);
       };
 
-      setMessages(prev => prev.map(m => m.isTyping ? { ...m, text: aiText, isTyping: false } : m));
+      socket.onmessage = (event) => {
+
+        //check if the incoming packet is a raw binary frame from the AI 
+        if (event.data instanceof ArrayBuffer) {
+          //this is a raw audio chunk from the backend
+          //we hand it off directly to our playback queue engine
+          handleIncomingAudioChunk(event.data);
+          return;
+        }
+
+        //otherwise, process it  as a JSON control or text transcription frame
+        try {
+          const data = JSON.parse(event.data);
+          
+          // Handle stream fragments sent from our Gemini backend agent
+          if (data.type === 'text') {
+            // Live appending transcript text strings
+            setMessages(prev => {
+              const lastMsg = prev[prev.length - 1];
+              if (lastMsg && lastMsg.sender === 'ai' && !lastMsg.isTyping) {
+                return [...prev.slice(0, -1), { ...lastMsg, text: lastMsg.text + data.payload }];
+              } else {
+                return [...prev, { id: crypto.randomUUID(), sender: 'ai', text: data.payload, timestamp: new Date() }];
+              }
+            });
+          }
+          
+          if (data.type === 'interrupted') {
+            // Tell our future playback engine to drop current buffer instantly
+            console.log('Barge-in caught! Stop playback.');
+            handleUserInterruption();
+          }
+        } catch (err) {
+          // If it's a binary audio message packet, we handle it in step 3.4
+        }
+      };
+
+      socket.onerror = () => {
+        throw new Error('WebSocket pipeline error encountered.');
+      };
+
+      socket.onclose = () => {
+        console.log('🔒 Server link terminated.');
+        cleanupUIStates();
+      };
 
     } catch (err: any) {
-      setMessages(prev => prev.map(m =>
-        m.isTyping ? { ...m, text: '[Error: could not connect to backend]', isTyping: false } : m
-      ));
-      setErrorMsg(err.message || 'Pipeline failure — is the backend running?');
-      setWaveState('idle');
-      setWaveStateLocal('idle');
-    } finally {
-      setIsLoading(false);
-      inputRef.current?.focus();
+      setErrorMsg(err.message || 'Could not reach streaming backend server.');
+      cleanupUIStates();
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  const disconnectPipeline = () => {
+
+    stopRecording();
+
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    cleanupUIStates();
+  };
+
+  const cleanupUIStates = () => {
+    setConnectionState('idle');
+    setWaveState('idle');
+    setWaveStateLocal('idle');
+  };
+
+  const startRecording = async (socket: WebSocket) => {
+    try {
+      // 1. Request microphone permissions from the user
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000, // Request 16kHz natively if supported
+          echoCancellation: true,
+          noiseSuppression: true,
+        }
+      });
+      streamRef.current = stream;
+
+      // 2. Instantiate our low-level AudioContext 
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const audioContext = new AudioContextClass();
+      audioContextRef.current = audioContext;
+
+      // 3. Connect our microphone stream to the Web Audio graph
+      const source = audioContext.createMediaStreamSource(stream);
+      sourceRef.current = source;
+
+      // 4. Create a processor node with a 4096-byte frame buffer
+      // 1 input channel, 1 output channel
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
+
+      // 5. Downsample & convert Float32 audio into Int16 Linear PCM
+      processor.onaudioprocess = (e) => {
+        if (socket.readyState !== WebSocket.OPEN) return;
+
+        const inputData = e.inputBuffer.getChannelData(0); // Left channel float array
+        const inputSampleRate = e.inputBuffer.sampleRate;
+        
+        // Downsample the chunk if the browser context is running higher than 16kHz
+        const downsampledBuffer = downsampleBuffer(inputData, inputSampleRate, 16000);
+        
+        // Convert standard Float32 values (-1.0 to 1.0) into 16-bit integers (-32768 to 32767)
+        const pcmBuffer = new Int16Array(downsampledBuffer.length);
+        for (let i = 0; i < downsampledBuffer.length; i++) {
+          // Clamp bounds securely
+          const s = Math.max(-1, Math.min(1, downsampledBuffer[i]));
+          pcmBuffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+
+        // Send the raw binary chunk immediately down our active WebSocket wire
+        socket.send(pcmBuffer.buffer);
+      };
+
+      // Connect nodes together: Source -> Processor -> Speakers (required to spark clock)
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+
+    } catch (err) {
+      console.error('Failed to initialize microphone streaming node:', err);
+      setErrorMsg('Microphone access denied or audio initialization failed.');
+      disconnectPipeline();
+    }
+  };
+
+  const stopRecording = () => {
+    // Gracefully close down the web audio pipeline nodes
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
+    if (sourceRef.current) {
+      sourceRef.current.disconnect();
+      sourceRef.current = null;
+    }
+    if (audioContextRef.current) {
+      if (audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close();
+      }
+      audioContextRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+
+    activeAudioNodesRef.current.forEach(node => { try { node.stop(); } catch(e){} });
+    activeAudioNodesRef.current = [];
+    if (playbackContextRef.current) {
+      if (playbackContextRef.current.state !== 'closed') {
+        playbackContextRef.current.close();
+      }
+      playbackContextRef.current = null;
+    }
+  };
+
+  const handleIncomingAudioChunk = async (arrayBuffer: ArrayBuffer) => {
+    try {
+      // 1. Lazy-initialize the playback AudioContext if it doesn't exist yet
+      if (!playbackContextRef.current) {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        playbackContextRef.current = new AudioContextClass();
+        // Start scheduling from the exact current time of the audio clock
+        nextStartTimeRef.current = playbackContextRef.current.currentTime;
+      }
+
+      const ctx = playbackContextRef.current;
+
+      // Resume context safely if the browser paused it due to user interaction rules
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
+
+      // 2. Convert raw Int16 binary data back into standard Web Audio Float32 samples
+      const int16Array = new Int16Array(arrayBuffer);
+      const float32Array = new Float32Array(int16Array.length);
+      for (let i = 0; i < int16Array.length; i++) {
+        float32Array[i] = int16Array[i] / 32768.0;
+      }
+
+      // 3. Create a standard single-channel (Mono) Web Audio AudioBuffer
+      // Gemini Live natively outputs audio at a 24000Hz (24kHz) sample rate
+      const audioBuffer = ctx.createBuffer(1, float32Array.length, 24000);
+      audioBuffer.getChannelData(0).set(float32Array);
+
+      // 4. Create an AudioBufferSourceNode to read this buffer chunk
+      const sourceNode = ctx.createBufferSource();
+      sourceNode.buffer = audioBuffer;
+
+      // 5. Connect the source node directly to your visualizer canvas's AnalyserNode!
+      // Your useWaveform hook listens to canvasRef, so we route the sound through it
+      sourceNode.connect(ctx.destination);
+
+      // Track this source node in our active references pool so we can kill it if interrupted
+      activeAudioNodesRef.current.push(sourceNode);
+
+      // 6. Timeline Scheduling Strategy:
+      // If the queue has fallen behind schedule, catch up instantly to minimize latency
+      if (nextStartTimeRef.current < ctx.currentTime) {
+        nextStartTimeRef.current = ctx.currentTime;
+      }
+
+      // Schedule this chunk to play back at the precise microsecond the last chunk finishes
+      sourceNode.start(nextStartTimeRef.current);
+      
+      // Increment the timeline marker by the exact physical duration of this audio frame
+      nextStartTimeRef.current += audioBuffer.duration;
+
+      // Clean up the node from our tracking array once it finishes playing normally
+      sourceNode.onended = () => {
+        activeAudioNodesRef.current = activeAudioNodesRef.current.filter(node => node !== sourceNode);
+      };
+
+    } catch (err) {
+      console.error('Error scheduling real-time audio playback frame:', err);
+    }
+  };
+
+  const handleUserInterruption = () => {
+    console.log('⚡ Handling barge-in: Purging playback queue instantly.');
+    
+    // 1. Forcibly stop every single audio buffer source node currently playing or queued
+    activeAudioNodesRef.current.forEach(node => {
+      try {
+        node.stop();
+      } catch (e) {
+        // Node might have already ended naturally
+      }
+    });
+    
+    // 2. Reset our tracking arrays and structural timeline clock
+    activeAudioNodesRef.current = [];
+    if (playbackContextRef.current) {
+      nextStartTimeRef.current = playbackContextRef.current.currentTime;
+    }
+  };
+
+  // Math utility to cleanly compress higher browser frequencies into standard 16kHz
+  const downsampleBuffer = (buffer: Float32Array, fromRate: number, toRate: number): Float32Array => {
+    if (fromRate === toRate) return buffer;
+    if (fromRate < toRate) {
+      console.warn("Cannot upsample audio source effectively.");
+      return buffer;
+    }
+    const sampleRateRatio = fromRate / toRate;
+    const newLength = Math.round(buffer.length / sampleRateRatio);
+    const result = new Float32Array(newLength);
+    let offsetResult = 0;
+    let offsetBuffer = 0;
+    while (offsetResult < result.length) {
+      const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
+      let accum = 0;
+      let count = 0;
+      for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+        accum += buffer[i];
+        count++;
+      }
+      result[offsetResult] = count > 0 ? accum / count : 0;
+      offsetResult++;
+      offsetBuffer = nextOffsetBuffer;
+    }
+    return result;
   };
 
   return (
@@ -497,52 +750,55 @@ export const AIChat: React.FC = () => {
           </div>
         )}
 
-        {/* ── Input ── */}
-        <div style={{ padding: '12px 20px', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input
-            ref={inputRef}
-            className="vl-input"
-            type="text"
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={`Message ${theme.label} · ${currentVoice?.name ?? ''}...`}
-            disabled={isLoading}
-            style={{
-              flex: 1,
-              padding: '10px 15px',
-              borderRadius: 12,
-              border: `1.5px solid`,
-              borderColor: input.length > 0 ? theme.primary : '#E5E7EB',
-              background: '#fff',
-              color: '#111827',
-              fontSize: 14,
-              fontWeight: 400,
-              transition: 'border-color 0.18s',
-              caretColor: theme.primary,
-            }}
-          />
+        {/* ── Audio Control Core Deck ── */}
+        <div style={{ 
+          padding: '24px 20px', 
+          display: 'flex', 
+          flexDirection: 'column',
+          alignItems: 'center', 
+          justifyContent: 'center',
+          background: '#FAFAFA',
+          borderTop: '1px solid #F3F4F6',
+          gap: 12
+        }}>
           <button
             className="vl-send"
-            onClick={handleSend}
-            disabled={isLoading || !input.trim()}
-            aria-label="Send message"
+            onClick={toggleVoiceConnection}
+            aria-label={connectionState === 'active' ? "Disconnect conversation" : "Start conversation"}
             style={{
-              width: 42, height: 42,
-              borderRadius: 12,
+              width: 64, height: 64,
+              borderRadius: '50%',
               border: 'none',
-              background: isLoading || !input.trim() ? '#E5E7EB' : theme.primary,
-              color: isLoading || !input.trim() ? '#9CA3AF' : '#fff',
-              cursor: isLoading || !input.trim() ? 'not-allowed' : 'pointer',
+              background: connectionState === 'active' ? '#EF4444' 
+                        : connectionState === 'connecting' ? '#F59E0B' 
+                        : theme.primary,
+              color: '#fff',
+              cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 17,
-              transition: 'all 0.18s',
-              flexShrink: 0,
-              boxShadow: !isLoading && input.trim() ? `0 2px 8px ${theme.primary}44` : 'none',
+              fontSize: 24,
+              transition: 'all 0.2s ease',
+              boxShadow: `0 4px 14px ${connectionState === 'active' ? '#EF4444' : theme.primary}55`,
             }}
           >
-            <i className="ti ti-arrow-up" aria-hidden />
+            {connectionState === 'connecting' ? (
+              <i className="ti ti-refresh" style={{ animation: 'vl-typing 1s infinite linear' }} />
+            ) : connectionState === 'active' ? (
+              <i className="ti ti-microphone-off" />
+            ) : (
+              <i className="ti ti-microphone" />
+            )}
           </button>
+          
+          <span style={{ 
+            fontSize: 13, 
+            fontWeight: 600, 
+            color: connectionState === 'active' ? '#EF4444' : '#6B7280',
+            letterSpacing: '-0.1px'
+          }}>
+            {connectionState === 'active' ? 'Click to Disconnect / Mute' 
+             : connectionState === 'connecting' ? 'Establishing Secure Voice Link...' 
+             : `Connect Voice Call with ${theme.label}`}
+          </span>
         </div>
 
       </div>

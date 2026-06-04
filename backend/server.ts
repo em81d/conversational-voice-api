@@ -35,7 +35,7 @@ app.post('/api/chat', async (req, res) => {
     // ── Step 1: Generate conversational text with the standard chat model ──
     // This is always gemini-2.5-flash regardless of provider — it only does text.
     const textResponse = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-2.0-flash-exp',
       contents: message,
     });
     const aiText = textResponse.text || "I couldn't process an answer.";
