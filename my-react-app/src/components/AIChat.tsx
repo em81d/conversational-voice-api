@@ -345,10 +345,13 @@ export const AIChat: React.FC = () => {
         throw new Error('WebSocket pipeline error encountered.');
       };
 
-      socket.onclose = () => {
-        console.log('🔒 Server link terminated.');
-        cleanupUIStates();
-      };
+      socket.onclose = (event: CloseEvent) => {
+      console.warn('🔒 Server link terminated.');
+      console.warn(`   👉 Browser caught Close Code: ${event.code}`);
+      console.warn(`   👉 Browser caught Close Reason: ${event.reason || 'None provided'}`);
+      console.warn(`   👉 Was Clean Disconnect?: ${event.wasClean}`);
+      cleanupUIStates();
+    };
 
     } catch (err: any) {
       setErrorMsg(err.message || 'Could not reach streaming backend server.');
@@ -497,6 +500,8 @@ export const AIChat: React.FC = () => {
       const sourceNode = ctx.createBufferSource();
       sourceNode.buffer = audioBuffer;
 
+      setWaveStateLocal('active');
+
       // 5. Connect the source node directly to your visualizer canvas's AnalyserNode!
       // Your useWaveform hook listens to canvasRef, so we route the sound through it
       sourceNode.connect(ctx.destination);
@@ -519,6 +524,9 @@ export const AIChat: React.FC = () => {
       // Clean up the node from our tracking array once it finishes playing normally
       sourceNode.onended = () => {
         activeAudioNodesRef.current = activeAudioNodesRef.current.filter(node => node !== sourceNode);
+        if (activeAudioNodesRef.current.length === 0) {
+          setWaveStateLocal('idle');
+        }
       };
 
     } catch (err) {
