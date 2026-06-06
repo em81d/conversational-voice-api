@@ -150,7 +150,9 @@ wss.on('connection', async (ws, req) => {
 
   // We maintain a reference to our outbound API connection
   let geminiLiveSocket: WebSocket | null = null;
+  let elevenLiveSocket: WebSocket | null = null;
   let isSetupComplete = false;
+  let elevenReady = false;
 
   if (provider === 'google') {
     try {
@@ -182,7 +184,7 @@ wss.on('connection', async (ws, req) => {
         console.log('✅ Setup block cleared. Stream is primed for recording packets.');
       });
 
-      geminiLiveSocket.on('message', (data) => {
+      geminiLiveSocket.on('message', (data: WebSocket.RawData) => {
         try {
           const response = JSON.parse(data.toString());
 
@@ -241,47 +243,152 @@ wss.on('connection', async (ws, req) => {
       ws.close();
     }
   }
+  else if (provider === 'elevenlabs') {
+    const elevenUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${process.env.ELEVENLABS_AGENT_ID}`;
+    elevenLiveSocket = new WebSocket(elevenUrl, {
+      headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY || ''}
+    });
+    let elevenReady = false;
+
+    elevenLiveSocket.on('open', () => {
+      console.log('🎙️ ElevenLabs socket open. Sending initiation config...');
+
+      // Override the voice with whatever the user selected in the UI
+      const initiationFrame = {
+        type: 'conversation_initiation_client_data',
+        conversation_config_override: {
+          tts: { voice_id: voiceId }  // e.g. "EXAVITQu4vr4xnSDxMaL"
+        }
+      };
+      elevenLiveSocket?.send(JSON.stringify(initiationFrame));
+    });
+
+    elevenLiveSocket.on('message', (data: WebSocket.RawData) => {
+      try {
+        const frame = JSON.parse(data.toString());
+
+        switch (frame.type) {
+
+          case 'conversation_initiation_metadata':
+            // Session is confirmed ready — now safe to forward mic audio
+            elevenReady = true;
+            console.log('✅ ElevenLabs session confirmed. Audio format:',
+              frame.conversation_initiation_metadata_event.agent_output_audio_format);
+            
+            ws.send(JSON.stringify({
+              type: 'session_config',
+              sampleRate: 16000
+            }));
+            break;
+
+          case 'audio':
+            // Decode base64 PCM and send as raw binary to the browser
+            // (same pattern your Gemini branch uses)
+
+            if (frame.audio_event?.audio_base_64) {
+              const audioBuffer = Buffer.from(
+                frame.audio_event.audio_base_64, 'base64'
+              );
+              ws.send(audioBuffer);
+            }
+            break;
+
+          case 'agent_response':
+            // Forward text transcript to browser for the chat UI
+            if (frame.agent_response_event?.agent_response) {
+              ws.send(JSON.stringify({
+                type: 'text',
+                payload: frame.agent_response_event.agent_response
+              }));
+            }
+            break;
+
+          case 'user_transcript':
+            // Optional: show user's speech in the chat log too
+            ws.send(JSON.stringify({
+              type: 'user_transcript',
+              payload: frame.user_transcription_event.user_transcript
+            }));
+            break;
+
+          case 'interruption':
+            ws.send(JSON.stringify({ type: 'interrupted' }));
+            break;
+
+          case 'ping':
+            // Must respond to pings or ElevenLabs will close the connection
+            if (frame.ping_event?.event_id) {
+              elevenLiveSocket?.send(JSON.stringify({
+                type: 'pong',
+                event_id: frame.ping_event.event_id
+              }));
+            }
+            break;
+        }
+      } catch (err) {
+        console.error('Error parsing ElevenLabs frame:', err);
+      }
+    });
+  }
 
   // 5. Route Incoming User Traffic from Frontend
   ws.on('message', (message: WebSocket.RawData) => {
-    if (!geminiLiveSocket || geminiLiveSocket.readyState !== WebSocket.OPEN || !isSetupComplete) {
-       return;
-    }
-
     try {
-      // Determine if it's binary chunk data (audio)
-      if (Buffer.isBuffer(message)) {
-        const base64Audio = message.toString('base64');
-        sendAudioToGemini(base64Audio);
-      } else if (message instanceof ArrayBuffer) {
-        // Safe conversion of standard web ArrayBuffer to Node Buffer
-        const base64Audio = Buffer.from(new Uint8Array(message)).toString('base64');
-        sendAudioToGemini(base64Audio);
-      } else if (Array.isArray(message)) {
-        // Combine array of buffers if fragmented
-        const base64Audio = Buffer.concat(message).toString('base64');
-        sendAudioToGemini(base64Audio);
-      } else {
-        try {
-          // Cast 'message' to unknown first, then string to make the compiler happy
-          const messageStr = (message as unknown as string).toString();
-          const parsed = JSON.parse(messageStr);
-          
-          if (parsed.type === 'text_input') {
-            const textPacket = {
-              clientContent: {
-                turns: [{ role: 'user', parts: [{ text: parsed.payload }] }],
-                turnComplete: true
-              }
-            };
-            geminiLiveSocket.send(JSON.stringify(textPacket));
+      //ELEVENLABS ROUTING PIPELINE
+      if (provider === 'elevenlabs') {
+        if (!elevenLiveSocket || elevenLiveSocket.readyState !== WebSocket.OPEN || !isSetupComplete) {
+          return; // Drop early buffer cycles until the initiation handshake completes
+        }
+
+        if (Buffer.isBuffer(message)) {
+          // ElevenLabs handles incoming speech via object strings rather than unformatted raw streams
+          elevenLiveSocket.send(JSON.stringify({
+            user_audio_chunk: message.toString('base64')
+          }));
+        }
+        return; 
+      }
+      //GEMINI ROUTING PIPELINE
+      if (provider === 'google'){
+
+        if (!geminiLiveSocket || geminiLiveSocket.readyState !== WebSocket.OPEN || !isSetupComplete) {
+          return;
+        }
+
+        // Determine if it's binary chunk data (audio)
+        if (Buffer.isBuffer(message)) {
+          const base64Audio = message.toString('base64');
+          sendAudioToGemini(base64Audio);
+        } else if (message instanceof ArrayBuffer) {
+          // Safe conversion of standard web ArrayBuffer to Node Buffer
+          const base64Audio = Buffer.from(new Uint8Array(message)).toString('base64');
+          sendAudioToGemini(base64Audio);
+        } else if (Array.isArray(message)) {
+          // Combine array of buffers if fragmented
+          const base64Audio = Buffer.concat(message).toString('base64');
+          sendAudioToGemini(base64Audio);
+        } else {
+          try {
+            // Cast 'message' to unknown first, then string to make the compiler happy
+            const messageStr = (message as unknown as string).toString();
+            const parsed = JSON.parse(messageStr);
+            
+            if (parsed.type === 'text_input') {
+              const textPacket = {
+                clientContent: {
+                  turns: [{ role: 'user', parts: [{ text: parsed.payload }] }],
+                  turnComplete: true
+                }
+              };
+              geminiLiveSocket.send(JSON.stringify(textPacket));
+            }
+          } catch (parseError) {
+            console.error('Failed to parse text frame or received unexpected binary format:', parseError);
           }
-        } catch (parseError) {
-          console.error('Failed to parse text frame or received unexpected binary format:', parseError);
         }
       }
     } catch (err) {
-      console.error('Error proxying traffic to Gemini:', err);
+      console.error('Error proxying traffic upstream:', err);
     }
   });
 
@@ -303,10 +410,20 @@ wss.on('connection', async (ws, req) => {
     console.log(`❌ Browser Client closed proxy link.`);
     console.log(`   👉 Browser Close Code: ${code}`);
     console.log(`   👉 Browser Close Reason: ${reason.toString() || 'None'}`);
+    
     isSetupComplete = false;
+    elevenReady = false;
+    
     if (geminiLiveSocket) {
       geminiLiveSocket.close();
       geminiLiveSocket = null;
+    }
+
+    if (elevenLiveSocket) {
+      if  (elevenLiveSocket.readyState === WebSocket.OPEN) {
+        elevenLiveSocket.close();
+      }
+      elevenLiveSocket = null;
     }
   });
 });
