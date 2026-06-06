@@ -249,6 +249,7 @@ export const AIChat: React.FC = () => {
   const playbackContextRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef<number>(0);
   const activeAudioNodesRef = useRef<AudioBufferSourceNode[]>([]);
+  const sampleRateRef = useRef<number>(24000);
 
 
   const setWaveState = useWaveform(canvasRef, selectedProvider);
@@ -318,6 +319,13 @@ export const AIChat: React.FC = () => {
         try {
           const data = JSON.parse(event.data);
           
+          //CATCH SEAMLESS DOWNSTREAM AUDIO CONFIGURATION RECALIBRATIONS
+          if (data.type === 'session_config') {
+            console.log('Recalibrating frontend audio timeline rate context to: ${data.sampleRate} Hz');
+            sampleRateRef.current = data.sampleRate;
+            return;
+          }
+
           // Handle stream fragments sent from our Gemini backend agent
           if (data.type === 'text') {
             // Live appending transcript text strings
@@ -493,8 +501,8 @@ export const AIChat: React.FC = () => {
 
       // 3. Create a standard single-channel (Mono) Web Audio AudioBuffer
       // Gemini Live natively outputs audio at a 24000Hz (24kHz) sample rate
-      const audioBuffer = ctx.createBuffer(1, float32Array.length, 24000);
-      audioBuffer.getChannelData(0).set(float32Array);
+      const audioBuffer = ctx.createBuffer(1, float32Array.length, sampleRateRef.current);
+      audioBuffer.copyToChannel(float32Array, 0);
 
       // 4. Create an AudioBufferSourceNode to read this buffer chunk
       const sourceNode = ctx.createBufferSource();
