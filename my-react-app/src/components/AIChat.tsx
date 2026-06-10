@@ -34,7 +34,7 @@ const VOICE_REGISTRY: Record<ProviderType, VoiceOption[]> = {
     { id: 'JaagUurP1dmW3WscoJ79', name: 'dahlia',  desc: 'intriguing gal'   }
   ],
   hume: [
-    { id: 'ee96fb5f-ec1a-4f41-a9ba-6d119e64c8fd', name: 'EVI', desc: 'Adaptive emotion' },
+    { id: 'ee96fb5f-ec1a-4f41-a9ba-6d119e64c8fd', name: 'EVI', desc: 'Adaptive emotion - Alex' },
   ],
 };
 
