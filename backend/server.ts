@@ -356,9 +356,21 @@ wss.on('connection', async (ws, req) => {
 
     humeSocket.on('open', () => {
       console.log('🧠 Hume EVI socket open.');
+
+      const sessionSettings = {
+        type: 'session_settings',
+        audio: {
+          encoding: 'linear16',
+          sample_rate: 16000,   // matches what your frontend sends
+          channels: 1
+        }
+      };
+      humeSocket?.send(JSON.stringify(sessionSettings));
+
+
       humeReady = true;
       // No initiation frame needed — the session is live immediately on open
-      ws.send(JSON.stringify({ type: 'session_config', sampleRate: 16000 }));
+      ws.send(JSON.stringify({ type: 'session_config', sampleRate: 48000 }));
     });
 
     humeSocket.on('message', (data: WebSocket.RawData) => {
