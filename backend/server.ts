@@ -137,7 +137,7 @@ const server = app.listen(port, () => {
 });
 
 // 2. Attach the WebSocket Server to that exact same HTTP server
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, path: '/stream' });
 
 // 3. Set up the connection heartbeat listener
 wss.on('connection', async (ws, req) => {
@@ -251,7 +251,6 @@ wss.on('connection', async (ws, req) => {
     elevenLiveSocket = new WebSocket(elevenUrl, {
       headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY || ''}
     });
-    let elevenReady = false;
 
     elevenLiveSocket.on('open', () => {
       console.log('🎙️ ElevenLabs socket open. Sending initiation config...');
@@ -332,6 +331,18 @@ wss.on('connection', async (ws, req) => {
         console.error('Error parsing ElevenLabs frame:', err);
       }
     });
+
+    elevenLiveSocket.on('error', (err) => {
+    console.error('❌ ElevenLabs socket error:', err);
+      ws.close();
+    });
+
+    elevenLiveSocket.on('close', (code: number, reason: Buffer) => {
+      console.warn(`🔒 ElevenLabs closed: ${code} — ${reason.toString() || 'No reason'}`);
+      if (code === 1008) console.error('💡 Diagnosis: Auth failure — check ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID');
+      if (code === 1011) console.error('💡 Diagnosis: Internal ElevenLabs error or credit limit hit');
+      ws.close();
+    });
   }
 
   // 5. Route Incoming User Traffic from Frontend
@@ -339,7 +350,7 @@ wss.on('connection', async (ws, req) => {
     try {
       //ELEVENLABS ROUTING PIPELINE
       if (provider === 'elevenlabs') {
-        if (!elevenLiveSocket || elevenLiveSocket.readyState !== WebSocket.OPEN || !isSetupComplete) {
+        if (!elevenLiveSocket || elevenLiveSocket.readyState !== WebSocket.OPEN || !elevenReady) {
           return; // Drop early buffer cycles until the initiation handshake completes
         }
 

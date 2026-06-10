@@ -29,13 +29,12 @@ const VOICE_REGISTRY: Record<ProviderType, VoiceOption[]> = {
     { id: 'Fenrir', name: 'Fenrir', desc: 'Monster deep ♂' },
   ],
   elevenlabs: [
-    { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Sarah',  desc: 'Reassuring ♀' },
-    { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam',   desc: 'Dominant ♂'   },
-    { id: 'Xb7hH8MSUJpSbSDYk0k2', name: 'Alice',  desc: 'Educator ♀'   },
-    { id: 'nPczCjzI2devNBz1zQrb', name: 'Brian',  desc: 'Comforting ♂' },
+    { id: 'e0LG5Mpq7SLRdJvrtmcJ', name: 'grandma',  desc: 'new old lady friend' },
+    { id: 'dag0x2dW9i5XIWwJ5KlD', name: 'chxpo',   desc: 'cool guy'   },
+    { id: 'JaagUurP1dmW3WscoJ79', name: 'dahlia',  desc: 'intriguing gal'   }
   ],
   hume: [
-    { id: 'hume_default', name: 'EVI', desc: 'Adaptive emotion' },
+    { id: 'ee96fb5f-ec1a-4f41-a9ba-6d119e64c8fd', name: 'EVI', desc: 'Adaptive emotion' },
   ],
 };
 
@@ -321,7 +320,7 @@ export const AIChat: React.FC = () => {
           
           //CATCH SEAMLESS DOWNSTREAM AUDIO CONFIGURATION RECALIBRATIONS
           if (data.type === 'session_config') {
-            console.log('Recalibrating frontend audio timeline rate context to: ${data.sampleRate} Hz');
+            console.log(`Recalibrating frontend audio timeline rate context to: ${data.sampleRate} Hz`);
             sampleRateRef.current = data.sampleRate;
             return;
           }
