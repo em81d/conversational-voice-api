@@ -151,8 +151,10 @@ wss.on('connection', async (ws, req) => {
   // We maintain a reference to our outbound API connection
   let geminiLiveSocket: WebSocket | null = null;
   let elevenLiveSocket: WebSocket | null = null;
+  let humeSocket: WebSocket | null = null;
   let isSetupComplete = false;
   let elevenReady = false;
+  let humeReady = false;
 
   if (provider === 'google') {
     try {
@@ -344,6 +346,90 @@ wss.on('connection', async (ws, req) => {
       ws.close();
     });
   }
+  else if (provider === 'hume') {
+    const humeUrl = `wss://api.hume.ai/v0/evi/chat` +
+      `?api_key=${process.env.HUME_API_KEY}` +
+      `&config_id=${process.env.HUME_CONFIG_ID}` +
+      `&voice_id=${voiceId}`;   // overrides the config's default voice per-session
+
+    humeSocket = new WebSocket(humeUrl);
+
+    humeSocket.on('open', () => {
+      console.log('🧠 Hume EVI socket open.');
+      humeReady = true;
+      // No initiation frame needed — the session is live immediately on open
+      ws.send(JSON.stringify({ type: 'session_config', sampleRate: 16000 }));
+    });
+
+    humeSocket.on('message', (data: WebSocket.RawData) => {
+      try {
+        const frame = JSON.parse(data.toString());
+
+        switch (frame.type) {
+
+          case 'chat_metadata':
+            // First frame after connection — contains chat_group_id for session resumption
+            console.log('✅ Hume session established. Chat ID:', frame.chat_group_id);
+            break;
+
+          case 'audio_output':
+            // Base64-encoded audio chunk — same pattern as ElevenLabs
+            if (frame.data) {
+              const audioBuffer = Buffer.from(frame.data, 'base64');
+              ws.send(audioBuffer);
+            }
+            break;
+
+          case 'assistant_message':
+            // EVI's text response for the chat transcript
+            if (frame.message?.content) {
+              ws.send(JSON.stringify({
+                type: 'text',
+                payload: frame.message.content
+              }));
+            }
+            break;
+
+          case 'user_message':
+            // User's transcribed speech
+            if (frame.message?.content) {
+              ws.send(JSON.stringify({
+                type: 'user_transcript',
+                payload: frame.message.content
+              }));
+            }
+            break;
+
+          case 'assistant_end':
+            // EVI finished its turn — optional UI signal
+            console.log('Hume turn complete.');
+            break;
+
+          case 'error':
+            console.error('Hume error:', frame.code, frame.message);
+            // E0300 = out of credits, E0301 = blocked by subscription
+            if (frame.code === 'E0300') console.error('💡 Diagnosis: Hume credits exhausted.');
+            if (frame.code === 'E0301') console.error('💡 Diagnosis: Hume subscription limit hit.');
+            ws.close();
+            break;
+        }
+      } catch (err) {
+        console.error('Error parsing Hume frame:', err);
+      }
+    });
+
+    humeSocket.on('error', (err) => {
+      console.error('❌ Hume socket error:', err);
+      ws.close();
+    });
+
+    humeSocket.on('close', (code: number, reason: Buffer) => {
+      console.warn(`🔒 Hume closed: ${code} — ${reason.toString() || 'No reason'}`);
+      if (code === 1008) console.error('💡 Diagnosis: Auth failure — check HUME_API_KEY and HUME_CONFIG_ID');
+      ws.close();
+    });
+
+  }
 
   // 5. Route Incoming User Traffic from Frontend
   ws.on('message', (message: WebSocket.RawData) => {
@@ -401,6 +487,19 @@ wss.on('connection', async (ws, req) => {
           }
         }
       }
+
+      if (provider === 'hume') {
+        if (!humeSocket || humeSocket.readyState !== WebSocket.OPEN || !humeReady) return;
+
+        if (Buffer.isBuffer(message)) {
+          humeSocket.send(JSON.stringify({
+            type: 'audio_input',
+            data: message.toString('base64')
+          }));
+        }
+        return;
+      }
+
     } catch (err) {
       console.error('Error proxying traffic upstream:', err);
     }
@@ -438,6 +537,11 @@ wss.on('connection', async (ws, req) => {
         elevenLiveSocket.close();
       }
       elevenLiveSocket = null;
+    }
+        // Add to your existing ws.on('close') cleanup block:
+    if (humeSocket) {
+      if (humeSocket.readyState === WebSocket.OPEN) humeSocket.close();
+      humeSocket = null;
     }
   });
 });
