@@ -165,7 +165,10 @@ wss.on('connection', async (ws, req) => {
         
         const setupMessage = {
           setup: {
-            model: "models/gemini-3.1-flash-live-preview", 
+            model: "models/gemini-3.1-flash-live-preview",
+            system_instruction: {
+              parts: [{ text: "You are a new friend. Just try to casually get to know your conversation partner. Create an imaginary life story and persona and share elements of them when prompted." }]  // your prompt here
+            }, 
             generation_config: {
               response_modalities: ["audio"], 
               speech_config: {
